@@ -5,7 +5,7 @@ from .backbone.mobilevit import mobile_vit_small, mobile_vit_x_small, mobile_vit
 from .backbone.mvit_unet_backbone import MobileVitUnetBackbone
 from .backbone import (resnet,)
 from .backbone.mobilevit_unet import Vit_Unet
-
+from .backbone.xception import xception
 
 def _segm_resnet(name, backbone_name, num_classes, output_stride, pretrained_backbone):
 
@@ -59,13 +59,34 @@ def _segm_mobilevit(name, backbone_name, num_classes, mobilevit_size,pretrained_
 def _segm_mvit_unet( num_classes):
     backbone=MobileVitUnetBackbone(Vit_Unet(n_channels=3, n_classes=num_classes, bilinear=False))
     inplanes =  512  # 取决于你最后的通道数
-    low_level_planes = 64  # 取决于你 layer1 的输出通道数
-    return_layers = {'mobilevit': 'out', 'layer7': 'low_level'}
+    low_level_planes = 128  # 取决于你 layer1 的输出通道数
+    return_layers = {'mobilevit': 'out', 'layer2': 'low_level'}
     classifier = DeepLabHeadV3Plus(inplanes, low_level_planes, num_classes, [6, 12, 18])
-    #backbone = IntermediateLayerGetter(backbone, return_layers=return_layers)
+    backbone = IntermediateLayerGetter(backbone, return_layers=return_layers)
     model = DeepLabV3(backbone, classifier,n_classes=num_classes,bilinear=False)
     return model
-
+def _segm_xception(name, backbone_name, num_classes, output_stride, pretrained_backbone):
+    if output_stride==8:
+        replace_stride_with_dilation=[False, False, True, True]
+        aspp_dilate = [12, 24, 36]
+    else:
+        replace_stride_with_dilation=[False, False, False, True]
+        aspp_dilate = [6, 12, 18]
+    
+    backbone = xception(pretrained= 'imagenet' if pretrained_backbone else False, replace_stride_with_dilation=replace_stride_with_dilation)
+    
+    inplanes = 2048
+    low_level_planes = 128
+    
+    if name=='deeplabv3plus':
+        return_layers = {'conv4': 'out', 'block1': 'low_level'}
+        classifier = DeepLabHeadV3Plus(inplanes, low_level_planes, num_classes, aspp_dilate)
+    elif name=='deeplabv3':
+        return_layers = {'conv4': 'out'}
+        classifier = DeepLabHead(inplanes , num_classes, aspp_dilate)
+    backbone = IntermediateLayerGetter(backbone, return_layers=return_layers)
+    model = DeepLabV3(backbone, classifier,n_classes=num_classes,bilinear=False)
+    return model
 
 def deeplabv3_resnet50(num_classes=8, output_stride=8, pretrained_backbone=False):
     """Constructs a DeepLabV3 model with a ResNet-50 backbone.
@@ -95,6 +116,17 @@ def deeplabv3plus_mvit_unet(num_classes=8):
         pretrained_backbone (bool): If True, use the pretrained backbone.
     """
      return _segm_mvit_unet(num_classes=num_classes)
+ 
+def deeplabv3_xception(num_classes=21, output_stride=8, pretrained_backbone=True, **kwargs):
+    """Constructs a DeepLabV3 model with a Xception backbone.
+
+    Args:
+        num_classes (int): number of classes.
+        output_stride (int): output stride for deeplab.
+        pretrained_backbone (bool): If True, use the pretrained backbone.
+    """
+    return _segm_xception('deeplabv3plus', 'xception', num_classes, output_stride=output_stride, pretrained_backbone=pretrained_backbone)
+
 
 if __name__ == '__main__':
     # 创建使用ResNet-101的DeepLabV3+模型

@@ -18,9 +18,10 @@ from evaluate import evaluate,compute_miou
 from vit_unet import Vit_Unet
 from utils.data_loading import BasicDataset, CarvanaDataset
 from utils.dice_score import dice_loss
-from mobilevit_deeplab.modeling import deeplabv3plus_mvit_unet
-dir_img = Path('/root/autodl-tmp/data/img_dir/train')
-dir_mask = Path('/root/autodl-tmp/data/ann_dir/train')
+from mobilevit_deeplab.modeling import deeplabv3plus_mvit_unet,deeplabv3_xception
+
+dir_img = Path('/root/autodl-tmp/03/train/images')
+dir_mask = Path('/root/autodl-tmp/03/train/labels')
 dir_checkpoint = Path('/root/autodl-tmp/checkpoints')
 
 
@@ -156,15 +157,16 @@ def train_model(
                             if not (torch.isinf(value.grad) | torch.isnan(value.grad)).any():
                                 histograms['Gradients/' + tag] = wandb.Histogram(value.grad.data.cpu())
 
-                        #val_score = compute_miou(model, val_loader, device, model.n_classes,amp)
-                        val_score = evaluate(model, val_loader, device,amp)
+                        val_score,mf1= compute_miou(model, val_loader, device, model.n_classes,amp)
+                        #val_score,mf1 = evaluate(model, val_loader, device,amp)
                         scheduler.step(val_score)
-
-                        logging.info('Validation Dice score: {}'.format(val_score))
+                        logging.info('Validation Mf1 score: {}'.format(mf1))
+                        logging.info('Validation Miou score: {}'.format(val_score))
                         try:
                             experiment.log({
                                 'learning rate': optimizer.param_groups[0]['lr'],
-                                'validation Dice': val_score,
+                                'validation Miou': val_score,
+                                'mF1': mf1,
                                 'images': wandb.Image(images[0].cpu()),
                                 'masks': {
                                     'true': wandb.Image(true_masks[0].float().cpu()),
@@ -187,7 +189,7 @@ def train_model(
 
 def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
-    parser.add_argument('--epochs', '-e', metavar='E', type=int, default=100, help='Number of epochs')
+    parser.add_argument('--epochs', '-e', metavar='E', type=int, default=50, help='Number of epochs')
     parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=10, help='Batch size')
     parser.add_argument('--learning-rate', '-l', metavar='LR', type=float, default=1e-5,
                         help='Learning rate', dest='lr')
@@ -213,7 +215,7 @@ if __name__ == '__main__':
     # n_channels=3 for RGB images
     # n_classes is the number of probabilities you want to get per pixel
     #model = Vit_Unet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
-    model=deeplabv3plus_mvit_unet(num_classes=args.classes)
+    model=deeplabv3_xception(num_classes=args.classes,pretrained_backbone=False)
     model = model.to(memory_format=torch.channels_last)
 
     logging.info(f'Network:\n'

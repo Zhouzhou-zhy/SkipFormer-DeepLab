@@ -53,9 +53,28 @@ def compute_miou(net, dataloader, device, num_classes, amp):
         miou = iou_per_class[1]  # 二分类只取前景类的IoU
     else:
         miou = iou_per_class.mean()  # 多分类排除背景类
+#计算mF1分数
+    f1_per_class = torch.zeros(num_classes, device=device)
+    for cls in range(num_classes):
+        tp = confusion_matrix[cls, cls]
+        fp = confusion_matrix[:, cls].sum() - tp
+        fn = confusion_matrix[cls, :].sum() - tp
 
+        precision = tp / (tp + fp + 1e-8)
+        recall = tp / (tp + fn + 1e-8)
+        if (precision + recall) == 0:
+            f1 = 0.0
+        else:
+            f1 = 2 * precision * recall / (precision + recall + 1e-8)
+
+        f1_per_class[cls] = f1
+
+    if net.n_classes == 1:
+        mf1 = f1_per_class[1]  # 二分类只看前景
+    else:
+        mf1 = f1_per_class.mean()  # 多分类求所有类别平均
     net.train()
-    return miou
+    return miou,mf1
 
 def evaluate(net, dataloader, device, amp):
     net.eval()
