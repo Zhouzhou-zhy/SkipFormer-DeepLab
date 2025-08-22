@@ -73,8 +73,13 @@ def compute_miou(net, dataloader, device, num_classes, amp):
         mf1 = f1_per_class[1]  # 二分类只看前景
     else:
         mf1 = f1_per_class.mean()  # 多分类求所有类别平均
+    
+    #计算OA整体精度分数
+    correct = confusion_matrix.diag().sum()
+    total   = confusion_matrix.sum()
+    oa = correct / total
     net.train()
-    return miou,mf1
+    return miou,mf1,iou_per_class,oa
 
 def evaluate(net, dataloader, device, amp):
     net.eval()

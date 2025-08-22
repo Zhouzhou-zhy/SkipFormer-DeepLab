@@ -36,7 +36,7 @@ class MobileVitUnetBackbone(nn.Module):
         # 返回高层和低层特征
         return {
             'out': vit_out ,
-            'low_level':x8
+            'low_level':x3
         }
         
 

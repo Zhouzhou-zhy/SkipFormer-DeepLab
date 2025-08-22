@@ -18,10 +18,11 @@ from evaluate import evaluate,compute_miou
 from vit_unet import Vit_Unet
 from utils.data_loading import BasicDataset, CarvanaDataset
 from utils.dice_score import dice_loss
-from mobilevit_deeplab.modeling import deeplabv3plus_mvit_unet,deeplabv3_xception
+from mobilevit_deeplab.modeling import deeplabv3plus_mvit_unet,deeplabv3_xception,deeplabv3_resnet50
+from Swin_Unet.vision_transformer import SwinUnet
 
-dir_img = Path('/root/autodl-tmp/03/train/images')
-dir_mask = Path('/root/autodl-tmp/03/train/labels')
+dir_img = Path('/root/autodl-tmp/LoveDA/03/train/images')
+dir_mask = Path('/root/autodl-tmp/LoveDA/03/train/labels')
 dir_checkpoint = Path('/root/autodl-tmp/checkpoints')
 
 
@@ -157,16 +158,20 @@ def train_model(
                             if not (torch.isinf(value.grad) | torch.isnan(value.grad)).any():
                                 histograms['Gradients/' + tag] = wandb.Histogram(value.grad.data.cpu())
 
-                        val_score,mf1= compute_miou(model, val_loader, device, model.n_classes,amp)
-                        #val_score,mf1 = evaluate(model, val_loader, device,amp)
-                        scheduler.step(val_score)
+                        mIoU,mf1,iou_per_class,oa= compute_miou(model, val_loader, device, model.n_classes,amp)
+                        #mIoU,mf1 = evaluate(model, val_loader, device,amp)
+                        scheduler.step(mIoU)
                         logging.info('Validation Mf1 score: {}'.format(mf1))
-                        logging.info('Validation Miou score: {}'.format(val_score))
+                        logging.info('Validation Miou score: {}'.format(mIoU))
+                        logging.info("Validation IoU per class: " + ", ".join([f"class {idx}: {val:.4f}" for idx, val in enumerate(iou_per_class)]))
+                                                                            
                         try:
                             experiment.log({
                                 'learning rate': optimizer.param_groups[0]['lr'],
-                                'validation Miou': val_score,
+                                'validation Miou': mIoU,
                                 'mF1': mf1,
+                                'IoU per class': wandb.Histogram(iou_per_class.cpu()),
+                                'OA': oa,
                                 'images': wandb.Image(images[0].cpu()),
                                 'masks': {
                                     'true': wandb.Image(true_masks[0].float().cpu()),
@@ -190,7 +195,7 @@ def train_model(
 def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
     parser.add_argument('--epochs', '-e', metavar='E', type=int, default=50, help='Number of epochs')
-    parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=10, help='Batch size')
+    parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=11, help='Batch size')
     parser.add_argument('--learning-rate', '-l', metavar='LR', type=float, default=1e-5,
                         help='Learning rate', dest='lr')
     parser.add_argument('--load', '-f', type=str, default=False, help='Load model from a .pth file')
@@ -199,7 +204,7 @@ def get_args():
                         help='Percent of the data that is used as validation (0-100)')
     parser.add_argument('--amp', action='store_true', default=False, help='Use mixed precision')
     parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
-    parser.add_argument('--classes', '-c', type=int, default=7, help='Number of classes')
+    parser.add_argument('--classes', '-c', type=int, default=8, help='Number of classes')
 
     return parser.parse_args()
 
@@ -215,7 +220,10 @@ if __name__ == '__main__':
     # n_channels=3 for RGB images
     # n_classes is the number of probabilities you want to get per pixel
     #model = Vit_Unet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
-    model=deeplabv3_xception(num_classes=args.classes,pretrained_backbone=False)
+    #model=deeplabv3plus_mvit_unet(num_classes=args.classes)
+  #  model=SwinUnet(img_size=224, n_classes=args.classes, zero_head=False, vis=False)
+   # model=deeplabv3_resnet50(num_classes=args.classes)
+    model=UNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
     model = model.to(memory_format=torch.channels_last)
 
     logging.info(f'Network:\n'
