@@ -12,7 +12,8 @@ from utils.data_loading import BasicDataset
 from unet import UNet
 from vit_unet import Vit_Unet
 from utils.utils import plot_img_and_mask
-from mobilevit_deeplab.modeling import deeplabv3plus_mvit_unet,deeplabv3_resnet50
+from SkipFormer_DeepLab.modeling import deeplabv3plus_mvit_unet, deeplabv3_resnet50
+
 
 def predict_img(net, full_img, device, scale_factor=1, out_threshold=0.5):
     net.eval()
@@ -91,15 +92,18 @@ def get_args():
         help="Maximum number of images to process and display",
     )
     return parser.parse_args()
+
+
 colors = [
-        (255, 255, 255),        # 类别0 - 白色
-        (255, 0, 0),      # 类别1 - 红色
-        (0, 255,0),      # 类别2 - 绿色
-        (255, 255, 0),      # 类别3 - 蓝色
-        (0, 0, 255),    # 类别4 - 黄色
-        (255, 69, 0),    # 类别5 - 紫红
-        (128, 0, 128),    # 类别6 - 红色
-    ]
+    (255, 255, 255),  # 类别0 - 白色
+    (255, 0, 0),  # 类别1 - 红色
+    (0, 255, 0),  # 类别2 - 绿色
+    (255, 255, 0),  # 类别3 - 蓝色
+    (0, 0, 255),  # 类别4 - 黄色
+    (255, 69, 0),  # 类别5 - 紫红
+    (128, 0, 128),  # 类别6 - 红色
+]
+
 
 def get_output_filenames(args):
     def _generate_name(fn):
@@ -110,7 +114,7 @@ def get_output_filenames(args):
 
 def mask_to_color_image(mask: np.ndarray):
     # 自定义每个类别的颜色（0~6）
-    
+
     h, w = mask.shape
     color_mask = np.zeros((h, w, 3), dtype=np.uint8)
 
@@ -118,7 +122,6 @@ def mask_to_color_image(mask: np.ndarray):
         color_mask[mask == i] = color
 
     return Image.fromarray(color_mask)
-
 
 
 def overlay_multiclass_mask(image, mask, colors, alpha=0.5):
@@ -137,7 +140,6 @@ def overlay_multiclass_mask(image, mask, colors, alpha=0.5):
     return overlay.convert("RGB")
 
 
-
 if __name__ == "__main__":
     args = get_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -150,16 +152,16 @@ if __name__ == "__main__":
     in_files = in_files[: args.max_images]  # 限制最多处理 args.max_images 张图像
     out_files = get_output_filenames(args)
 
-    #net = UNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
+    # net = UNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
     # net=Vit_Unet(
     #     n_channels=3,
     #     n_classes=3,
-        
+
     # )
-    #net = UNet(n_channels=3, n_classes=256, bilinear=False)
-    #net=deeplabv3plus_mvit_unet(num_classes=args.classes)
-    net=deeplabv3plus_mvit_unet(num_classes=args.classes)
-   
+    # net = UNet(n_channels=3, n_classes=256, bilinear=False)
+    # net=deeplabv3plus_mvit_unet(num_classes=args.classes)
+    net = deeplabv3plus_mvit_unet(num_classes=args.classes)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Loading model {args.model}")
     logging.info(f"Using device {device}")
@@ -171,7 +173,7 @@ if __name__ == "__main__":
 
     logging.info("Model loaded!")
 
-    # 创建一个大的 plt 画布 
+    # 创建一个大的 plt 画布
     batch_size = 16
     for batch_idx in range(0, len(in_files), batch_size):
         batch_files = in_files[batch_idx : batch_idx + batch_size]
@@ -180,7 +182,7 @@ if __name__ == "__main__":
         for i, filename in enumerate(batch_files):
             # if i > args.max_images:  # 确保不超过最大图像数量
             #     break
-                
+
             logging.info(f"Predicting image {filename} ...")
             img = Image.open(filename)
 
@@ -209,7 +211,7 @@ if __name__ == "__main__":
                     f"Visualizing results for image {filename}, close to continue..."
                 )
                 plot_img_and_mask(img, mask)
-        
+
         # 调整子图间距并显示
         plt.tight_layout()
         plt.show()
