@@ -14,13 +14,15 @@ from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 from unet import UNet
 import wandb
-from evaluate import evaluate
+from evaluate import evaluate,compute_miou
 from vit_unet import Vit_Unet
 from utils.data_loading import BasicDataset, CarvanaDataset
 from utils.dice_score import dice_loss
+from mobilevit_deeplab.modeling import deeplabv3plus_mvit_unet,deeplabv3_xception,deeplabv3_resnet50
+from Swin_Unet.vision_transformer import SwinUnet
 
-dir_img = Path('/root/autodl-tmp/The_cropped_image_tiles_and_raster_labels/train/image')
-dir_mask = Path('/root/autodl-tmp/The_cropped_image_tiles_and_raster_labels/train/label')
+dir_img = Path('/root/autodl-tmp/LoveDA/03/train/images')
+dir_mask = Path('/root/autodl-tmp/LoveDA/03/train/labels')
 dir_checkpoint = Path('/root/autodl-tmp/checkpoints')
 
 
@@ -35,7 +37,7 @@ def train_model(
         img_scale: float = 0.5,
         amp: bool = False,
         weight_decay: float = 1e-8,
-        momentum: float = 0.999,
+        momentum: float = 0.9,
         gradient_clipping: float = 1.0,
 ):
     # 1. Create dataset
@@ -56,7 +58,7 @@ def train_model(
     val_loader = DataLoader(val_set, shuffle=False, drop_last=True, **loader_args)
 
     # (Initialize logging)
-    experiment = wandb.init(project='U-Net', resume='allow', anonymous='must')
+    experiment = wandb.init(project='U-Net', resume='allow', mode="offline",anonymous='must')
     experiment.config.update(
         dict(epochs=epochs, batch_size=batch_size, learning_rate=learning_rate,
              val_percent=val_percent, save_checkpoint=save_checkpoint, img_scale=img_scale, amp=amp)
@@ -75,8 +77,15 @@ def train_model(
     ''')
 
     # 4. Set up the optimizer, the loss, the learning rate scheduler and the loss scaling for AMP
-    optimizer = optim.RMSprop(model.parameters(),
-                              lr=learning_rate, weight_decay=weight_decay, momentum=momentum, foreach=True)
+    # optimizer = optim.RMSprop(model.parameters(),
+    #                           lr=learning_rate, weight_decay=weight_decay, momentum=momentum, foreach=True)
+    optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr=learning_rate,          # 建议初始学习率1e-4~3e-4
+    weight_decay=0.05,  # 推荐值0.01~0.05（AdamW需更高权重衰减）
+    betas=(0.9, 0.999),        # 保持默认动量参数
+    eps=1e-8                    # 数值稳定性系数
+)
     #scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=5)  # goal: maximize Dice score
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer,
@@ -134,7 +143,9 @@ def train_model(
                     'epoch': epoch
                 })
                 pbar.set_postfix(**{'loss (batch)': loss.item()})
-
+                for name, param in model.named_parameters():
+                    if param.grad is None:
+                        print(f"Gradient is None for parameter: {name}")
                 # Evaluation round
                 division_step = (n_train // (5 * batch_size))
                 if division_step > 0:
@@ -147,14 +158,20 @@ def train_model(
                             if not (torch.isinf(value.grad) | torch.isnan(value.grad)).any():
                                 histograms['Gradients/' + tag] = wandb.Histogram(value.grad.data.cpu())
 
-                        val_score = evaluate(model, val_loader, device, amp)
-                        scheduler.step(val_score)
-
-                        logging.info('Validation Dice score: {}'.format(val_score))
+                        mIoU,mf1,iou_per_class,oa= compute_miou(model, val_loader, device, model.n_classes,amp)
+                        #mIoU,mf1 = evaluate(model, val_loader, device,amp)
+                        scheduler.step(mIoU)
+                        logging.info('Validation Mf1 score: {}'.format(mf1))
+                        logging.info('Validation Miou score: {}'.format(mIoU))
+                        logging.info("Validation IoU per class: " + ", ".join([f"class {idx}: {val:.4f}" for idx, val in enumerate(iou_per_class)]))
+                                                                            
                         try:
                             experiment.log({
                                 'learning rate': optimizer.param_groups[0]['lr'],
-                                'validation Dice': val_score,
+                                'validation Miou': mIoU,
+                                'mF1': mf1,
+                                'IoU per class': wandb.Histogram(iou_per_class.cpu()),
+                                'OA': oa,
                                 'images': wandb.Image(images[0].cpu()),
                                 'masks': {
                                     'true': wandb.Image(true_masks[0].float().cpu()),
@@ -178,16 +195,16 @@ def train_model(
 def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
     parser.add_argument('--epochs', '-e', metavar='E', type=int, default=50, help='Number of epochs')
-    parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=4, help='Batch size')
+    parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=11, help='Batch size')
     parser.add_argument('--learning-rate', '-l', metavar='LR', type=float, default=1e-5,
                         help='Learning rate', dest='lr')
     parser.add_argument('--load', '-f', type=str, default=False, help='Load model from a .pth file')
     parser.add_argument('--scale', '-s', type=float, default=0.5, help='Downscaling factor of the images')
-    parser.add_argument('--validation', '-v', dest='val', type=float, default=10.0,
+    parser.add_argument('--validation', '-v', dest='val', type=float, default=20.0,
                         help='Percent of the data that is used as validation (0-100)')
     parser.add_argument('--amp', action='store_true', default=False, help='Use mixed precision')
     parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
-    parser.add_argument('--classes', '-c', type=int, default=2, help='Number of classes')
+    parser.add_argument('--classes', '-c', type=int, default=8, help='Number of classes')
 
     return parser.parse_args()
 
@@ -202,7 +219,11 @@ if __name__ == '__main__':
     # Change here to adapt to your data
     # n_channels=3 for RGB images
     # n_classes is the number of probabilities you want to get per pixel
-    model = Vit_Unet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
+    #model = Vit_Unet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
+    #model=deeplabv3plus_mvit_unet(num_classes=args.classes)
+  #  model=SwinUnet(img_size=224, n_classes=args.classes, zero_head=False, vis=False)
+   # model=deeplabv3_resnet50(num_classes=args.classes)
+    model=UNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
     model = model.to(memory_format=torch.channels_last)
 
     logging.info(f'Network:\n'
